@@ -244,11 +244,36 @@
       <button class="icon-btn" data-close aria-label="Cerrar">✕</button>
     </div>
     <div class="modal-body" style="display:flex; flex-direction:column; gap:8px;">
+      <button class="btn primary full" id="import-discogs-btn">Importar desde Discogs</button>
       <button class="btn full" id="export-wishlist-btn">Exportar Wishlist (HTML)</button>
       <button class="btn full" id="export-json-btn">Backup completo (JSON)</button>
       <button class="btn full" id="import-json-btn">Importar JSON</button>
       <button class="btn full" id="change-token-btn">Cambiar token Discogs</button>
       <input type="file" id="import-file" accept=".json" style="display:none">
+    </div>
+  </div>
+</div>
+
+<!-- Discogs Import -->
+<div class="modal-backdrop" id="discogs-import-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>Importar desde Discogs</h2>
+      <button class="icon-btn" data-close aria-label="Cerrar">✕</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:14px; color:var(--muted); margin-bottom:16px; line-height:1.5">
+        Trae tu <b style="color:var(--text)">Collection</b> entera a Colección y tu <b style="color:var(--text)">Wantlist</b> a Wishlist. Los discos que ya tenés cargados (por release ID) se saltan sin pisarse.
+      </p>
+      <div class="field">
+        <label for="discogs-username">Tu username de Discogs</label>
+        <input type="text" id="discogs-username" placeholder="ej: nimuynitan" autocapitalize="off" autocorrect="off" spellcheck="false">
+        <div class="help">Es el nombre que aparece en la URL de tu perfil: discogs.com/user/<b>tu-username</b></div>
+      </div>
+      <div id="discogs-import-status" style="font-size:13px; color:var(--muted); margin-top:12px; min-height:20px;"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn primary" id="do-discogs-import-btn">Importar</button>
     </div>
   </div>
 </div>
@@ -755,6 +780,103 @@ async function exportFullJSON() {
   toast('Backup descargado', 'success');
 }
 
+// ================================ DISCOGS IMPORT =======================
+function basicInfoToRecord(bi, status, dateAdded) {
+  const artists = (bi.artists || [])
+    .map(a => (a.name || '').replace(/\s*\(\d+\)\s*$/, '').trim())
+    .filter(Boolean)
+    .join(', ');
+  const formats = (bi.formats || []).map(f => {
+    const d = (f.descriptions && f.descriptions.length) ? ' ' + f.descriptions.join('/') : '';
+    const q = f.qty && f.qty !== '1' ? ' x' + f.qty : '';
+    return (f.name || '') + d + q;
+  }).join(', ');
+  const label = (bi.labels || [])[0] || {};
+  return {
+    barcode: '',
+    discogs_id: bi.id,
+    artist: artists,
+    album: bi.title || '',
+    year: bi.year || null,
+    label: label.name || '',
+    format: formats,
+    country: '',
+    catno: label.catno || '',
+    cover_url: bi.cover_image || bi.thumb || '',
+    discogs_url: 'https://www.discogs.com/release/' + bi.id,
+    notes: '',
+    status,
+    added_at: dateAdded || new Date().toISOString(),
+  };
+}
+
+async function fetchDiscogsPage(path, page, perPage = 100) {
+  const url = `${DISCOGS_API}${path}?page=${page}&per_page=${perPage}&token=${encodeURIComponent(state.token)}`;
+  const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+  if (!res.ok) {
+    if (res.status === 401) throw new Error('Token inválido');
+    if (res.status === 404) throw new Error('Username no encontrado o perfil privado');
+    if (res.status === 429) throw new Error('Rate limit, esperá un minuto');
+    throw new Error('Discogs ' + res.status);
+  }
+  return res.json();
+}
+
+async function importFromDiscogs(username, onProgress) {
+  if (!state.token) throw new Error('Primero configurá tu token');
+  if (!username) throw new Error('Falta el username');
+  const existingIds = new Set(state.records.map(r => r.discogs_id).filter(Boolean));
+  const stats = { owned: 0, wishlist: 0, skipped: 0, errors: 0 };
+
+  const u = encodeURIComponent(username.trim());
+
+  // Collection
+  onProgress('Buscando tu colección...');
+  let page = 1, totalPages = 1;
+  do {
+    const data = await fetchDiscogsPage(`/users/${u}/collection/folders/0/releases`, page);
+    totalPages = (data.pagination && data.pagination.pages) || 1;
+    const items = data.releases || [];
+    for (const item of items) {
+      const bi = item.basic_information || {};
+      if (!bi.id) { stats.errors++; continue; }
+      if (existingIds.has(bi.id)) { stats.skipped++; continue; }
+      try {
+        await dbAdd(basicInfoToRecord(bi, 'owned', item.date_added));
+        existingIds.add(bi.id);
+        stats.owned++;
+      } catch(e) { stats.errors++; }
+    }
+    onProgress(`Colección: ${stats.owned} de ${(data.pagination && data.pagination.items) || '?'} (página ${page} de ${totalPages})`);
+    page++;
+    if (page <= totalPages) await new Promise(r => setTimeout(r, 200));
+  } while (page <= totalPages);
+
+  // Wantlist
+  onProgress('Buscando tu wishlist...');
+  page = 1; totalPages = 1;
+  do {
+    const data = await fetchDiscogsPage(`/users/${u}/wants`, page);
+    totalPages = (data.pagination && data.pagination.pages) || 1;
+    const items = data.wants || [];
+    for (const item of items) {
+      const bi = item.basic_information || {};
+      if (!bi.id) { stats.errors++; continue; }
+      if (existingIds.has(bi.id)) { stats.skipped++; continue; }
+      try {
+        await dbAdd(basicInfoToRecord(bi, 'wishlist', item.date_added));
+        existingIds.add(bi.id);
+        stats.wishlist++;
+      } catch(e) { stats.errors++; }
+    }
+    onProgress(`Wishlist: ${stats.wishlist} (página ${page} de ${totalPages})`);
+    page++;
+    if (page <= totalPages) await new Promise(r => setTimeout(r, 200));
+  } while (page <= totalPages);
+
+  return stats;
+}
+
 async function importJSON(file) {
   try {
     const text = await file.text();
@@ -857,6 +979,48 @@ document.addEventListener('DOMContentLoaded', async () => {
     $('#token-input').value = state.token;
     openModal('setup-modal');
   };
+
+  $('#import-discogs-btn').onclick = () => {
+    closeModal('menu-modal');
+    const saved = localStorage.getItem('discogs_username') || '';
+    $('#discogs-username').value = saved;
+    $('#discogs-import-status').textContent = '';
+    openModal('discogs-import-modal');
+    setTimeout(() => $('#discogs-username').focus(), 100);
+  };
+
+  $('#do-discogs-import-btn').onclick = async () => {
+    const username = $('#discogs-username').value.trim();
+    if (!username) { toast('Falta el username', 'error'); return; }
+    const btn = $('#do-discogs-import-btn');
+    btn.disabled = true;
+    btn.textContent = 'Importando...';
+    try {
+      localStorage.setItem('discogs_username', username);
+      const stats = await importFromDiscogs(username, (msg) => {
+        $('#discogs-import-status').textContent = msg;
+      });
+      await refresh();
+      const parts = [];
+      if (stats.owned) parts.push(`${stats.owned} en Colección`);
+      if (stats.wishlist) parts.push(`${stats.wishlist} en Wishlist`);
+      if (stats.skipped) parts.push(`${stats.skipped} ya estaban`);
+      if (stats.errors) parts.push(`${stats.errors} con error`);
+      const summary = parts.length ? parts.join(' · ') : 'Nada nuevo para traer';
+      $('#discogs-import-status').textContent = summary;
+      toast(summary, 'success');
+      setTimeout(() => closeModal('discogs-import-modal'), 2500);
+    } catch (e) {
+      $('#discogs-import-status').textContent = 'Error: ' + e.message;
+      toast(e.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Importar';
+    }
+  };
+  $('#discogs-username').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); $('#do-discogs-import-btn').click(); }
+  });
 });
 </script>
 </body>
