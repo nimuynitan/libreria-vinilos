@@ -277,7 +277,8 @@
     </div>
     <div class="modal-body" style="display:flex; flex-direction:column; gap:8px;">
       <button class="btn primary full" id="import-discogs-btn">Importar desde Discogs</button>
-      <button class="btn full" id="export-wishlist-btn">Exportar Wishlist (HTML)</button>
+      <button class="btn full" id="export-collection-btn">Compartir Colección (HTML)</button>
+      <button class="btn full" id="export-wishlist-btn">Compartir Wishlist (HTML)</button>
       <button class="btn full" id="export-json-btn">Backup completo (JSON)</button>
       <button class="btn full" id="import-json-btn">Importar JSON</button>
       <button class="btn full" id="change-token-btn">Cambiar token Discogs</button>
@@ -791,27 +792,40 @@ function download(filename, content, mime = 'text/html') {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function buildWishlistHTML(items) {
+function buildShareHTML(items, kind) {
   const data = items.map(r => ({
     artist: r.artist, album: r.album, year: r.year, label: r.label,
-    format: r.format, country: r.country, catno: r.catno,
-    cover_url: r.cover_url, discogs_url: r.discogs_url, notes: r.notes
+    format: r.format, cover_url: r.cover_url, discogs_url: r.discogs_url
   }));
+  const title = kind === 'wishlist' ? 'Wishlist' : 'Colección';
+  const subtitle = kind === 'wishlist'
+    ? `${items.length} disco${items.length !== 1 ? 's' : ''} que quiero`
+    : `${items.length} disco${items.length !== 1 ? 's' : ''} en mi colección`;
   return `<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Wishlist de vinilos</title>
+<title>${title} de vinilos</title>
 <style>
-  :root { --bg: #0a0a0a; --surface: #171717; --border: #2a2a2a; --text: #e8e8e8; --muted: #888; --accent: #d4a574; }
+  :root { --bg: #0a0a0a; --surface: #171717; --border: #2a2a2a; --text: #e8e8e8; --muted: #888; --accent: #d4a574; --accent-dim: #8a6d4b; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; min-height: 100vh; padding: 24px 16px; -webkit-font-smoothing: antialiased; }
-  header { max-width: 1200px; margin: 0 auto 32px; text-align: center; padding: 20px 0; border-bottom: 1px solid var(--border); }
+  header { max-width: 1200px; margin: 0 auto 24px; text-align: center; padding: 20px 0; border-bottom: 1px solid var(--border); }
   h1 { font-size: 20px; letter-spacing: 2px; text-transform: uppercase; font-weight: 600; }
   h1 span { color: var(--accent); }
   .intro { color: var(--muted); font-size: 14px; margin-top: 10px; line-height: 1.5; }
-  .grid { max-width: 1200px; margin: 0 auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 16px; }
+  .controls { max-width: 1200px; margin: 0 auto 20px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: center; }
+  .controls .lbl { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-right: 2px; }
+  .chip { background: var(--surface); border: 1px solid var(--border); color: var(--muted); padding: 6px 12px; border-radius: 16px; font-size: 12px; cursor: pointer; font-family: inherit; }
+  .chip:hover { color: var(--text); border-color: var(--accent-dim); }
+  .chip.active { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 600; }
+  .wrap { max-width: 1200px; margin: 0 auto; }
+  .group-header { margin: 24px 0 14px; padding-bottom: 10px; border-bottom: 1px solid var(--border); display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  .group-header:first-child { margin-top: 4px; }
+  .g-name { font-size: 17px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .g-count { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; flex-shrink: 0; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 16px; }
   @media (min-width: 640px) { .grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 20px; } }
   .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; transition: transform 0.15s, border-color 0.15s; text-decoration: none; color: inherit; display: block; }
   .card:hover { transform: translateY(-2px); border-color: var(--accent); }
@@ -821,46 +835,82 @@ function buildWishlistHTML(items) {
   .title { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
   .artist { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
   .meta { font-size: 11px; color: var(--accent); }
+  .card.year-prominent .meta { font-size: 16px; font-weight: 700; color: var(--accent); }
   footer { max-width: 1200px; margin: 48px auto 0; text-align: center; color: var(--muted); font-size: 12px; padding: 20px 0; border-top: 1px solid var(--border); }
 </style>
 </head>
 <body>
   <header>
-    <h1>Vinilos<span>.</span> Wishlist</h1>
-    <p class="intro">${items.length} disco${items.length !== 1 ? 's' : ''} que quiero.<br>Tocá cualquier portada para verlo en Discogs.</p>
+    <h1>Vinilos<span>.</span> ${title}</h1>
+    <p class="intro">${subtitle}.<br>Tocá cualquier portada para verlo en Discogs.</p>
   </header>
-  <div class="grid" id="grid"></div>
+  <div class="controls">
+    <span class="lbl">Ordenar</span>
+    <button class="chip active" data-sort="artist">Artista</button>
+    <button class="chip" data-sort="year">Año</button>
+    <button class="chip" data-sort="album">Álbum A-Z</button>
+  </div>
+  <div class="wrap" id="wrap"></div>
   <footer>Exportado ${new Date().toLocaleDateString('es-AR')}</footer>
   <script>
     const items = ${JSON.stringify(data)};
     const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-    document.getElementById('grid').innerHTML = items.map(r => \`
-      <a class="card" href="\${esc(r.discogs_url || '#')}" target="_blank" rel="noopener">
-        \${r.cover_url
-          ? \`<div class="cover" style="background-image:url('\${esc(r.cover_url)}')"></div>\`
-          : \`<div class="cover ph">sin portada</div>\`}
+    const artistKey = n => (n || '').replace(/\\s*\\(\\d+\\)\\s*$/, '').trim().toLowerCase();
+    const albumKey = s => (s || '').toLowerCase();
+    function card(r, yearProm) {
+      return \`<a class="card \${yearProm ? 'year-prominent' : ''}" href="\${esc(r.discogs_url || '#')}" target="_blank" rel="noopener">
+        \${r.cover_url ? \`<div class="cover" style="background-image:url('\${esc(r.cover_url)}')"></div>\` : \`<div class="cover ph">sin portada</div>\`}
         <div class="info">
           <div class="title">\${esc(r.album || '(sin título)')}</div>
           <div class="artist">\${esc(r.artist || '')}</div>
-          <div class="meta">\${r.year || ''}\${r.label ? ' · ' + esc(r.label) : ''}</div>
-        </div>
-      </a>
-    \`).join('');
+          <div class="meta">\${r.year || ''}\${r.label && !yearProm ? ' · ' + esc(r.label) : ''}</div>
+        </div></a>\`;
+    }
+    function render(mode) {
+      const wrap = document.getElementById('wrap');
+      let html = '';
+      if (mode === 'artist') {
+        const groups = {};
+        items.forEach(r => {
+          const k = artistKey(r.artist) || '(sin artista)';
+          (groups[k] = groups[k] || { name: (r.artist || '(sin artista)').replace(/\\s*\\(\\d+\\)\\s*$/, '').trim(), items: [] }).items.push(r);
+        });
+        Object.keys(groups).sort((a, b) => a.localeCompare(b, 'es')).forEach(k => {
+          const g = groups[k];
+          g.items.sort((a, b) => (a.year || 9999) - (b.year || 9999) || albumKey(a.album).localeCompare(albumKey(b.album), 'es'));
+          html += \`<div class="group-header"><span class="g-name">\${esc(g.name)}</span><span class="g-count">\${g.items.length} disco\${g.items.length !== 1 ? 's' : ''}</span></div>\`;
+          html += '<div class="grid">' + g.items.map(r => card(r, false)).join('') + '</div>';
+        });
+      } else if (mode === 'year') {
+        const sorted = [...items].sort((a, b) => (b.year || 0) - (a.year || 0) || artistKey(a.artist).localeCompare(artistKey(b.artist), 'es'));
+        html = '<div class="grid">' + sorted.map(r => card(r, true)).join('') + '</div>';
+      } else if (mode === 'album') {
+        const sorted = [...items].sort((a, b) => albumKey(a.album).localeCompare(albumKey(b.album), 'es'));
+        html = '<div class="grid">' + sorted.map(r => card(r, false)).join('') + '</div>';
+      }
+      wrap.innerHTML = html;
+    }
+    document.querySelectorAll('.chip[data-sort]').forEach(c => c.onclick = () => {
+      document.querySelectorAll('.chip[data-sort]').forEach(x => x.classList.toggle('active', x === c));
+      render(c.dataset.sort);
+    });
+    render('artist');
   <\/script>
 </body>
 </html>`;
 }
 
-async function exportWishlist() {
-  const items = state.records.filter(r => r.status === 'wishlist');
+async function exportShareList(kind) {
+  const items = state.records.filter(r => r.status === kind);
   if (items.length === 0) {
-    toast('Tu wishlist está vacía', 'error');
+    toast(kind === 'wishlist' ? 'Tu wishlist está vacía' : 'Tu colección está vacía', 'error');
     return;
   }
-  const html = buildWishlistHTML(items);
+  const html = buildShareHTML(items, kind);
   const date = new Date().toISOString().slice(0, 10);
-  download(`wishlist-${date}.html`, html);
-  toast('Wishlist exportada', 'success');
+  const name = kind === 'wishlist' ? `wishlist-${date}.html` : `coleccion-${date}.html`;
+  download(name, html);
+  toast(kind === 'wishlist' ? 'Wishlist exportada' : 'Colección exportada', 'success');
 }
 
 async function exportFullJSON() {
@@ -1070,7 +1120,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('#result-wishlist-btn').onclick = () => saveSelectedResult('wishlist');
 
   $('#menu-btn').onclick = () => openModal('menu-modal');
-  $('#export-wishlist-btn').onclick = async () => { closeModal('menu-modal'); await exportWishlist(); };
+  $('#export-collection-btn').onclick = async () => { closeModal('menu-modal'); await exportShareList('owned'); };
+  $('#export-wishlist-btn').onclick = async () => { closeModal('menu-modal'); await exportShareList('wishlist'); };
   $('#export-json-btn').onclick = async () => { closeModal('menu-modal'); await exportFullJSON(); };
   $('#import-json-btn').onclick = () => $('#import-file').click();
   $('#import-file').onchange = async (e) => {
