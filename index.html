@@ -116,6 +116,31 @@
   .spinner { display: inline-block; width: 20px; height: 20px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .loading { text-align: center; padding: 30px; color: var(--muted); }
+
+  .controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 16px; }
+  .controls .ctrl-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-right: 2px; }
+  .chip { background: var(--surface); border: 1px solid var(--border); color: var(--muted); padding: 6px 12px; border-radius: 16px; font-size: 12px; cursor: pointer; font-family: inherit; transition: all 0.15s; }
+  .chip:hover { color: var(--text); border-color: var(--accent-dim); }
+  .chip.active { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 600; }
+  .chip.view-toggle { margin-left: auto; }
+
+  .group-header { margin: 24px 0 14px; padding-bottom: 10px; border-bottom: 1px solid var(--border); display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  .group-header:first-child { margin-top: 4px; }
+  .group-header .g-name { font-size: 17px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .group-header .g-count { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; flex-shrink: 0; }
+
+  .card.year-prominent .year { font-size: 18px; color: var(--accent); font-weight: 700; margin-top: 6px; letter-spacing: 0.5px; }
+
+  .list { display: flex; flex-direction: column; gap: 4px; }
+  .row { display: grid; grid-template-columns: 44px 60px 1fr 1fr 100px; gap: 10px; align-items: center; padding: 8px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; transition: border-color 0.15s; }
+  @media (max-width: 640px) { .row { grid-template-columns: 40px 50px 1fr; gap: 8px; } .row .r-label, .row .r-format { display: none; } }
+  .row:hover { border-color: var(--accent-dim); }
+  .row .mini-cover { width: 40px; height: 40px; border-radius: 4px; background: #000 center/cover no-repeat; flex-shrink: 0; }
+  .row .mini-cover.placeholder { display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 9px; text-transform: uppercase; }
+  .row .r-year { font-size: 13px; color: var(--accent); font-weight: 600; text-align: center; font-family: monospace; }
+  .row .r-album { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .r-label { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .r-format { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -134,6 +159,13 @@
 <main>
   <div class="search-bar">
     <input type="search" id="search-input" placeholder="Buscar en mi colección...">
+  </div>
+  <div class="controls">
+    <span class="ctrl-label">Ordenar</span>
+    <button class="chip active" data-sort="recent">Recientes</button>
+    <button class="chip" data-sort="artist">Artista</button>
+    <button class="chip" data-sort="year">Año</button>
+    <button class="chip view-toggle" id="view-toggle" style="display:none">Ver como lista</button>
   </div>
   <div id="list"></div>
 </main>
@@ -285,6 +317,8 @@
 const state = {
   token: localStorage.getItem('discogs_token') || '',
   currentTab: 'owned',
+  currentSort: localStorage.getItem('sort_mode') || 'recent',
+  viewMode: localStorage.getItem('view_mode') || 'grid',
   records: [],
   pendingResults: [],
   pendingBarcode: '',
@@ -445,6 +479,38 @@ async function refresh() {
   render();
 }
 
+function artistKey(name) {
+  return (name || '').replace(/\s*\(\d+\)\s*$/, '').trim().toLowerCase();
+}
+
+function cardHTML(r, yearProminent) {
+  return `
+    <div class="card ${yearProminent ? 'year-prominent' : ''}" data-id="${r.id}">
+      ${r.cover_url
+        ? `<div class="cover" style="background-image:url('${esc(r.cover_url)}')"></div>`
+        : `<div class="cover placeholder">sin portada</div>`}
+      <div class="info">
+        <div class="title">${esc(r.album || '(sin título)')}</div>
+        <div class="artist">${esc(r.artist || '')}</div>
+        ${r.year ? `<div class="year">${r.year}</div>` : ''}
+      </div>
+    </div>`;
+}
+
+function rowHTML(r) {
+  const fmt = (r.format || '').split(',')[0].trim();
+  return `
+    <div class="row" data-id="${r.id}">
+      ${r.cover_url
+        ? `<div class="mini-cover" style="background-image:url('${esc(r.cover_url)}')"></div>`
+        : `<div class="mini-cover placeholder">—</div>`}
+      <div class="r-year">${r.year || '—'}</div>
+      <div class="r-album">${esc(r.album || '(sin título)')}</div>
+      <div class="r-label">${esc(r.label || '')}</div>
+      <div class="r-format">${esc(fmt)}</div>
+    </div>`;
+}
+
 function render() {
   const q = $('#search-input').value.trim().toLowerCase();
   let items = state.records.filter(r => r.status === state.currentTab);
@@ -456,7 +522,14 @@ function render() {
       String(r.year || '').includes(q)
     );
   }
-  items.sort((a, b) => (b.added_at || '').localeCompare(a.added_at || ''));
+
+  // Toggle "Ver como lista" solo visible en modo Artista
+  const vt = $('#view-toggle');
+  if (vt) {
+    vt.style.display = state.currentSort === 'artist' ? '' : 'none';
+    vt.textContent = state.viewMode === 'grid' ? 'Ver como lista' : 'Ver como grilla';
+  }
+
   const list = $('#list');
   if (items.length === 0) {
     if (q) {
@@ -467,19 +540,36 @@ function render() {
     }
     return;
   }
-  list.innerHTML = '<div class="grid">' + items.map(r => `
-    <div class="card" data-id="${r.id}">
-      ${r.cover_url
-        ? `<div class="cover" style="background-image:url('${esc(r.cover_url)}')"></div>`
-        : `<div class="cover placeholder">sin portada</div>`}
-      <div class="info">
-        <div class="title">${esc(r.album || '(sin título)')}</div>
-        <div class="artist">${esc(r.artist || '')}</div>
-        ${r.year ? `<div class="year">${r.year}</div>` : ''}
-      </div>
-    </div>
-  `).join('') + '</div>';
-  $$('.card').forEach(c => c.addEventListener('click', () => openDetail(parseInt(c.dataset.id))));
+
+  let html = '';
+  if (state.currentSort === 'artist') {
+    const groups = {};
+    for (const r of items) {
+      const k = artistKey(r.artist) || '(sin artista)';
+      (groups[k] ||= { name: (r.artist || '(sin artista)').replace(/\s*\(\d+\)\s*$/, '').trim(), items: [] }).items.push(r);
+    }
+    const keys = Object.keys(groups).sort((a, b) => a.localeCompare(b, 'es'));
+    for (const k of keys) {
+      const g = groups[k];
+      g.items.sort((a, b) => (a.year || 9999) - (b.year || 9999) || (a.album || '').localeCompare(b.album || '', 'es'));
+      html += `<div class="group-header"><span class="g-name">${esc(g.name)}</span><span class="g-count">${g.items.length} disco${g.items.length !== 1 ? 's' : ''}</span></div>`;
+      if (state.viewMode === 'list') {
+        html += '<div class="list">' + g.items.map(rowHTML).join('') + '</div>';
+      } else {
+        html += '<div class="grid">' + g.items.map(r => cardHTML(r, false)).join('') + '</div>';
+      }
+    }
+  } else if (state.currentSort === 'year') {
+    items.sort((a, b) => (b.year || 0) - (a.year || 0) || (a.artist || '').localeCompare(b.artist || '', 'es'));
+    html = '<div class="grid">' + items.map(r => cardHTML(r, true)).join('') + '</div>';
+  } else {
+    // 'recent' (default)
+    items.sort((a, b) => (b.added_at || '').localeCompare(a.added_at || ''));
+    html = '<div class="grid">' + items.map(r => cardHTML(r, false)).join('') + '</div>';
+  }
+
+  list.innerHTML = html;
+  $$('[data-id]').forEach(el => el.addEventListener('click', () => openDetail(parseInt(el.dataset.id))));
 }
 
 function openDetail(id) {
@@ -919,6 +1009,22 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   $('#search-input').addEventListener('input', render);
+
+  // Chips de orden
+  $$('.chip[data-sort]').forEach(c => {
+    c.classList.toggle('active', c.dataset.sort === state.currentSort);
+    c.onclick = () => {
+      state.currentSort = c.dataset.sort;
+      localStorage.setItem('sort_mode', state.currentSort);
+      $$('.chip[data-sort]').forEach(x => x.classList.toggle('active', x === c));
+      render();
+    };
+  });
+  $('#view-toggle').onclick = () => {
+    state.viewMode = state.viewMode === 'grid' ? 'list' : 'grid';
+    localStorage.setItem('view_mode', state.viewMode);
+    render();
+  };
 
   $('#fab').onclick = () => openModal('add-modal');
 
